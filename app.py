@@ -114,6 +114,7 @@ async def send_telegram_signal(signal, entry, tp, sl, risk):
 # === Расчёт входа и выхода ===
 def calculate_entry_tp_sl(price, direction):
     try:
+        price = float(price)  # Убедимся, что цена — обычное число
         volatility = price * 0.01
         if direction == "BUY":
             entry = price
@@ -135,7 +136,7 @@ def main():
         logging.info("=== НАЧАЛО ВЫПОЛНЕНИЯ MAIN ===")
         df = fetch_data(TICKER, LOOKBACK_DAYS)
 
-        # Проверка данных
+        # Проверка структуры данных
         logging.info(f"Столбцы в данных: {df.columns.tolist()}")
 
         X, y, full_data = prepare_features(df, TRADE_HORIZON)
@@ -143,7 +144,7 @@ def main():
 
         last_row = X.iloc[-1].values.reshape(1, -1)
         prediction = model.predict(last_row)[0]
-        current_price = df['Close'].iloc[-1]
+        current_price = float(df['Close'].iloc[-1])  # Убедимся, что это float
 
         signal = "BUY" if prediction == 1 else "SELL"
         entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal)

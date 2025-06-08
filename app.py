@@ -196,7 +196,7 @@ def check_short_term_confirmation(df_15m, signal):
         trend = 'up' if latest_price > avg_price else 'down'
         if signal == "BUY" and trend == "up" and rsi < 60:
             return True
-        elif signal == "SELL" and trend == "down" и rsi > 40:
+        elif signal == "SELL" and trend == "down" and rsi > 40:
             return True
         return False
     except Exception as e:

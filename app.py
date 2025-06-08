@@ -11,6 +11,7 @@ import time
 
 # === ML / Data ===
 import yfinance as yf
+import investpy
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -49,19 +50,43 @@ HISTORY_CSV = "trades_history.csv"
 CHECK_INTERVAL = 900  # Проверка каждые 15 минут
 
 # === Функции работы с данными ===
-def fetch_data(ticker, lookback_days, interval='1d'):
+def fetch_data(ticker='GC=F', lookback_days=730, interval='1d'):
     try:
-        logging.info(f"Начало загрузки данных ({interval})...")
+        logging.info(f"Начало загрузки данных через investpy ({interval})...")
+        
+        from investpy import get_historical_data
+        
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
-        data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
+        
+        # investpy использует 'gold' как commodity
+        if ticker == 'GC=F':
+            data = get_historical_data(
+                asset='gold',
+                country='United States',
+                from_date=start_date.strftime('%d/%m/%Y'),
+                to_date=end_date.strftime('%d/%m/%Y'),
+                interval=interval,
+                as_json=False,
+                order='ascending',
+                output_mode='pandas'
+            )
+        else:
+            raise ValueError("Неизвестный тикер")
 
+        if data.empty:
+            logging.warning("❌ Получены пустые данные от investpy")
+            return None
+
+        # Переименуем колонки под pandas.DataFrame
+        data.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         last_price = float(data['Close'].iloc[-1])
         logging.info(f"Данные успешно загружены: {data.shape[0]} свечей | Последняя цена: {last_price:.2f}")
         return data
+    
     except Exception as e:
-        logging.error(f"Ошибка загрузки данных: {str(e)}")
-        raise
+        logging.error(f"Ошибка загрузки данных через investpy: {str(e)}")
+        return None
 
 def compute_rsi(series, window=14):
     delta = series.diff().dropna()

@@ -91,6 +91,7 @@ def calculate_entry_tp_sl(price, direction):
     return entry, tp, sl, risk
 
 def main():
+    logging.info("Запуск основной логики...")
     df = fetch_data(TICKER, LOOKBACK_DAYS)
     X, y, full_data = prepare_features(df, TRADE_HORIZON)
     model = train_or_load_model(X, y)
@@ -102,7 +103,7 @@ def main():
     signal = "BUY" if prediction == 1 else "SELL"
     entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal)
     asyncio.run(send_telegram_signal(signal, entry, tp, sl, risk))
-    logging.info(f"Signal sent: {signal}, Entry: {entry}, TP: {tp}, SL: {sl}")
+    logging.info(f"Сигнал отправлен: {signal}, Entry: {entry}, TP: {tp}, SL: {sl}")
 
 # === Flask App ===
 app = Flask(__name__)

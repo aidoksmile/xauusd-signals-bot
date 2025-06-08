@@ -214,7 +214,7 @@ def walk_forward_training(X, y):
         y_train, y_test = y[train_index], y[test_index]
 
         model = Sequential()
-        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
         model.add(Dropout(0.2))
         model.add(LSTM(64, return_sequences=False))
         model.add(Dropout(0.2))

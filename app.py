@@ -27,7 +27,14 @@ from tensorflow.keras.callbacks import EarlyStopping
 
 # === Telegram Bot ===
 import telegram
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackContext
+)
 
 # === Настройка логирования ===
 logging.basicConfig(
@@ -366,14 +373,16 @@ async def handle_unknown(update, context):
     await update.message.reply_text("❌ Неизвестная команда")
 
 async def telegram_bot():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", handle_start))
-    application.add_handler(CommandHandler("signal", handle_signal))
-    application.add_handler(CommandHandler("history", handle_history))
-    application.add_handler(CommandHandler("graph", handle_graph))
-    application.add_handler(CommandHandler("accuracy", handle_accuracy))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
-    await application.run_polling()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("signal", handle_signal))
+    app.add_handler(CommandHandler("history", handle_history))
+    app.add_handler(CommandHandler("graph", handle_graph))
+    app.add_handler(CommandHandler("accuracy", handle_accuracy))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
+
+    await app.run_polling()
 
 # === Flask App ===
 app = Flask(__name__)

@@ -21,20 +21,12 @@ from joblib import dump, load
 
 # === Нейросеть (LSTM) ===
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 
 # === Telegram Bot ===
-import telegram
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CallbackContext
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 # === Настройка логирования ===
 logging.basicConfig(
@@ -55,7 +47,6 @@ GRAPH_PATH = "xauusd_signal.png"
 HISTORY_CSV = "trades_history.csv"
 
 CHECK_INTERVAL = 900  # Проверка каждые 15 минут
-MIN_ACCURACY_THRESHOLD = 0.6  # Если точность ниже — переобучаем модель
 
 # === Функции работы с данными ===
 def fetch_data(ticker, lookback_days, interval='1d'):
@@ -116,7 +107,8 @@ def train_or_load_model(X_train, y_train):
         logging.info("Модель не найдена. Обучение новой LSTM-модели...")
 
         model = Sequential()
-        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
+        model.add(Input(shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(LSTM(64, return_sequences=True))
         model.add(Dropout(0.2))
         model.add(LSTM(64, return_sequences=False))
         model.add(Dropout(0.2))
@@ -132,8 +124,7 @@ def train_or_load_model(X_train, y_train):
 # === Отправка сигнала в Telegram ===
 async def send_telegram_signal(signal, entry, tp, sl, risk, current_price):
     try:
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
-
+        bot = Application.builder().token(TELEGRAM_TOKEN).build().bot
         message = f"""
 📈 [XAU/USD Signal] *{signal}*
 
@@ -221,7 +212,8 @@ def walk_forward_training(X, y):
         y_train, y_test = y[train_index], y[test_index]
 
         model = Sequential()
-        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
+        model.add(Input(shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(LSTM(64, return_sequences=True))
         model.add(Dropout(0.2))
         model.add(LSTM(64, return_sequences=False))
         model.add(Dropout(0.2))
@@ -372,18 +364,6 @@ async def handle_accuracy(update, context):
 async def handle_unknown(update, context):
     await update.message.reply_text("❌ Неизвестная команда")
 
-async def telegram_bot():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", handle_start))
-    app.add_handler(CommandHandler("signal", handle_signal))
-    app.add_handler(CommandHandler("history", handle_history))
-    app.add_handler(CommandHandler("graph", handle_graph))
-    app.add_handler(CommandHandler("accuracy", handle_accuracy))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
-
-    await app.run_polling()
-
 # === Flask App ===
 app = Flask(__name__)
 
@@ -414,10 +394,27 @@ def run_continuously():
 
 # === Запуск сервиса ===
 if __name__ == "__main__":
-    tele_thread = Thread(target=lambda: asyncio.run(telegram_bot()), daemon=True)
-    tele_thread.start()
+    # Запуск Telegram-бота в основном потоке
+    def run_flask():
+        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000))
 
-    checker_thread = Thread(target=run_continuously, daemon=True)
+    def run_checker():
+        while True:
+            try:
+                main()
+            except Exception as e:
+                logging.error(f"Checker error: {str(e)}")
+            time.sleep(CHECK_INTERVAL)
+
+    # Запуск в разных потоках
+    from threading import Thread
+
+    tele_thread = Thread(target=run_flask, daemon=True)
+    checker_thread = Thread(target=run_checker, daemon=True)
+
+    tele_thread.start()
     checker_thread.start()
 
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    # Основной поток ждёт, пока бот работает
+    while True:
+        time.sleep(1)

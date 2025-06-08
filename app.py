@@ -4,18 +4,20 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 
-# === Flask ===
+# === Flask и фоновый запуск ===
 from flask import Flask, request
+from threading import Thread
+import time
 
 # === ML / Data ===
-import yfinance as yf
+import yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
-from joblib import dump, load
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+from joblib import dump, load
 
 # === Telegram Bot ===
 import telegram
@@ -32,10 +34,12 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 TICKER = 'GC=F'  # XAU/USD
-LOOKBACK_DAYS = 730  # История за 2 года
+LOOKBACK_DAYS = 730  # История обучения (2 года)
 TRADE_HORIZON = 3  # Прогноз на 3 дня вперёд
 MODEL_PATH = "xauusd_model.pkl"
 GRAPH_PATH = "xauusd_signal.png"
+
+CHECK_INTERVAL = 900  # 15 минут в секундах
 
 # === Функции работы с данными ===
 def fetch_data(ticker, lookback_days, interval='1d'):
@@ -44,7 +48,9 @@ def fetch_data(ticker, lookback_days, interval='1d'):
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
         data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-        logging.info(f"Данные успешно загружены: {data.shape[0]} свечей | Последняя цена: {data['Close'].iloc[-1]:.2f}")
+
+        last_price = float(data['Close'].iloc[-1])
+        logging.info(f"Данные успешно загружены: {data.shape[0]} свечей | Последняя цена: {last_price:.2f}")
         return data
     except Exception as e:
         logging.error(f"Ошибка загрузки данных: {str(e)}")
@@ -171,7 +177,6 @@ def check_short_term_confirmation(df_15m, signal):
         rsi = df_15m['RSI'].iloc[-1]
         trend = 'up' if df_15m['Close'].iloc[-1] > df_15m['Close'].iloc[-5:].mean() else 'down'
 
-        # Проверка по RSI и тренду
         if signal == "BUY" and trend == "up" and rsi < 60:
             return True
         elif signal == "SELL" and trend == "down" and rsi > 40:
@@ -205,12 +210,11 @@ def main():
 
         # Проверяем сигнал на младшем ТФ
         is_confirmed = check_short_term_confirmation(df_15m, signal_str)
-
         if not is_confirmed:
             logging.info(f"Сигнал {signal_str} не подтверждён → пропуск")
             return
 
-        # Если сигнал подтверждён → отправляем его
+        # Если всё подтверждено — рассчитываем уровни и отправляем
         entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal_str)
         asyncio.run(send_telegram_signal(signal_str, entry, tp, sl, risk, current_price, accuracy))
         logging.info(f"Сигнал отправлен: {signal_str}, Entry: {entry:.2f}, TP: {tp:.2f}, SL: {sl:.2f}")
@@ -218,13 +222,20 @@ def main():
     except Exception as e:
         logging.error(f"КРИТИЧЕСКАЯ ОШИБКА: {str(e)}", exc_info=True)
 
+# === Цикл проверки ===
+def run_continuously():
+    while True:
+        try:
+            main()
+        except Exception as e:
+            logging.error(f"Ошибка в основном цикле: {str(e)}")
+        time.sleep(CHECK_INTERVAL)  # 15 минут
+
 # === Flask App ===
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    if request.method == 'GET':
-        main()
     return {"status": "OK", "message": "Signal sent successfully"}
 
 @app.route('/signal')
@@ -237,5 +248,10 @@ def handle_exception(e):
     logging.exception("Uncaught exception: %s", str(e))
     return {"error": str(e)}, 500
 
+# === Запуск фонового потока ===
 if __name__ == "__main__":
+    thread = Thread(target=run_continuously)
+    thread.daemon = True
+    thread.start()
+
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

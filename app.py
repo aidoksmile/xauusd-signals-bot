@@ -40,6 +40,7 @@ def fetch_data(ticker, lookback_days):
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
         data = yf.download(ticker, start=start_date, end=end_date, interval='1d')
+        logging.info(f"Полученные столбцы: {data.columns.tolist()}")
         logging.info("Данные успешно загружены")
         return data
     except Exception as e:
@@ -62,11 +63,11 @@ def compute_rsi(series, window=14):
 def prepare_features(data, horizon):
     try:
         logging.info("Подготовка признаков...")
-        data['Return'] = data['Adj Close'].pct_change(horizon).shift(-horizon)
+        data['Return'] = data['Close'].pct_change(horizon).shift(-horizon)
         data['Target'] = np.where(data['Return'] > 0, 1, -1)  # BUY: 1, SELL: -1
-        data['SMA_10'] = data['Adj Close'].rolling(10).mean()
-        data['SMA_30'] = data['Adj Close'].rolling(30).mean()
-        data['RSI'] = compute_rsi(data['Adj Close'], 14)
+        data['SMA_10'] = data['Close'].rolling(10).mean()
+        data['SMA_30'] = data['Close'].rolling(30).mean()
+        data['RSI'] = compute_rsi(data['Close'], 14)
         data.dropna(inplace=True)
         X = data[['SMA_10', 'SMA_30', 'RSI']]
         y = data['Target']
@@ -133,12 +134,16 @@ def main():
     try:
         logging.info("=== НАЧАЛО ВЫПОЛНЕНИЯ MAIN ===")
         df = fetch_data(TICKER, LOOKBACK_DAYS)
+
+        # Проверка данных
+        logging.info(f"Столбцы в данных: {df.columns.tolist()}")
+
         X, y, full_data = prepare_features(df, TRADE_HORIZON)
         model = train_or_load_model(X, y)
 
         last_row = X.iloc[-1].values.reshape(1, -1)
         prediction = model.predict(last_row)[0]
-        current_price = df['Adj Close'].iloc[-1]
+        current_price = df['Close'].iloc[-1]
 
         signal = "BUY" if prediction == 1 else "SELL"
         entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal)

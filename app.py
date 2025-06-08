@@ -101,29 +101,37 @@ def train_or_load_model(X, y):
         logging.info(f"Модель обучена и сохранена. Точность: {acc:.2f}")
         return model, acc
 
-# === Отправка сигнала в Telegram ===
+# === Отправка сигнала в Telegram (вместе с графиком) ===
 async def send_telegram_signal(signal, entry, tp, sl, risk, current_price, accuracy):
     try:
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
 
         message = f"""
-📈 [XAU/USD Signal] {signal}
+📈 [XAU/USD Signal] *{signal}*
 
-💰 Current Price: {current_price:.2f}
-🔹 Entry: {entry:.2f}
-🔸 TP: {tp:.2f}
-🔻 SL: {sl:.2f}
-🪙 Risk: {risk:.2f}%
-📊 Accuracy: {accuracy * 100:.2f}%
-🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+💰 Current Price: *{current_price:.2f}*
+🔹 Entry: *{entry:.2f}*
+🔸 TP: *{tp:.2f}*
+🔻 SL: *{sl:.2f}*
+🪙 Risk: *{risk:.2f}%*
+📊 Accuracy: *{accuracy * 100:.2f}%*
+🕒 Time: *{datetime.now().strftime('%Y-%m-%d %H:%M')}*
         """
-        await bot.send_message(chat_id=CHAT_ID, text=message)
 
         # Генерация графика
         generate_graph(current_price, entry, tp, sl)
+
+        # Отправка изображения с подписью
         with open(GRAPH_PATH, 'rb') as photo:
-            await bot.send_photo(chat_id=CHAT_ID, photo=photo, caption="📊 График с сигналом")
+            await bot.send_photo(
+                chat_id=CHAT_ID,
+                photo=photo,
+                caption=message,
+                parse_mode='Markdown'
+            )
+
         logging.info(f"Telegram signal sent: {signal}, Цена: {current_price}, Точность: {accuracy:.2f}")
+
     except Exception as e:
         logging.error(f"Ошибка отправки Telegram-сообщения: {str(e)}")
         raise
@@ -197,7 +205,7 @@ def index():
 
 @app.route('/signal')
 def manual_signal():
-    main()  # Можно вызвать вручную через /signal
+    main()  # Ручной запуск через /signal
     return jsonify({"status": "OK", "message": "Signal manually triggered!"})
 
 @app.errorhandler(Exception)

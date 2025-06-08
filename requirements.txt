@@ -8,3 +8,4 @@ numpy
 matplotlib
 python-telegram-bot>=20.0
 joblib
+investpy==1.0.2

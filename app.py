@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 # === Flask ===
-from flask import Flask, jsonify
+from flask import Flask, request
 
 # === ML / Data ===
 import yfinance as yf
@@ -13,9 +13,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
+from joblib import dump, load
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-from joblib import dump, load
 
 # === Telegram Bot ===
 import telegram
@@ -38,14 +38,13 @@ MODEL_PATH = "xauusd_model.pkl"
 GRAPH_PATH = "xauusd_signal.png"
 
 # === Функции работы с данными ===
-def fetch_data(ticker, lookback_days):
+def fetch_data(ticker, lookback_days, interval='1d'):
     try:
-        logging.info("Начало загрузки данных...")
+        logging.info(f"Начало загрузки данных ({interval})...")
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
-        data = yf.download(ticker, start=start_date, end=end_date, interval='1d')
-        logging.info(f"Полученные столбцы: {data.columns.tolist()}")
-        logging.info("Данные успешно загружены")
+        data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
+        logging.info(f"Данные успешно загружены: {data.shape[0]} свечей | Последняя цена: {data['Close'].iloc[-1]:.2f}")
         return data
     except Exception as e:
         logging.error(f"Ошибка загрузки данных: {str(e)}")
@@ -66,7 +65,7 @@ def compute_rsi(series, window=14):
 
 def prepare_features(data, horizon):
     try:
-        logging.info("Подготовка признаков...")
+        logging.info("Подготовка признаков для модели...")
         data['Return'] = data['Close'].pct_change(horizon).shift(-horizon)
         data['Target'] = np.where(data['Return'] > 0, 1, -1)  # BUY: 1, SELL: -1
         data['SMA_10'] = data['Close'].rolling(10).mean()
@@ -101,7 +100,7 @@ def train_or_load_model(X, y):
         logging.info(f"Модель обучена и сохранена. Точность: {acc:.2f}")
         return model, acc
 
-# === Отправка сигнала в Telegram (вместе с графиком) ===
+# === Отправка сигнала в Telegram ===
 async def send_telegram_signal(signal, entry, tp, sl, risk, current_price, accuracy):
     try:
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
@@ -118,25 +117,16 @@ async def send_telegram_signal(signal, entry, tp, sl, risk, current_price, accur
 🕒 Time: *{datetime.now().strftime('%Y-%m-%d %H:%M')}*
         """
 
-        # Генерация графика
         generate_graph(current_price, entry, tp, sl)
-
-        # Отправка изображения с подписью
         with open(GRAPH_PATH, 'rb') as photo:
-            await bot.send_photo(
-                chat_id=CHAT_ID,
-                photo=photo,
-                caption=message,
-                parse_mode='Markdown'
-            )
+            await bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=message, parse_mode='Markdown')
 
-        logging.info(f"Telegram signal sent: {signal}, Цена: {current_price}, Точность: {accuracy:.2f}")
-
+        logging.info(f"Telegram signal sent: {signal}, Цена: {current_price:.2f}")
     except Exception as e:
         logging.error(f"Ошибка отправки Telegram-сообщения: {str(e)}")
         raise
 
-# === Расчёт входа и выхода ===
+# === Расчёт уровней ===
 def calculate_entry_tp_sl(price, direction):
     try:
         price = float(price)
@@ -155,17 +145,18 @@ def calculate_entry_tp_sl(price, direction):
         logging.error(f"Ошибка расчёта входа/выхода: {str(e)}")
         raise
 
-# === Генерация графика с сигналом ===
+# === Генерация графика ===
 def generate_graph(current_price, entry, tp, sl):
     try:
-        df_plot = fetch_data(TICKER, LOOKBACK_DAYS)
+        df_plot = fetch_data(TICKER, 7, interval='15m')
         plt.figure(figsize=(12, 6))
-        plt.plot(df_plot.index, df_plot['Close'], label='Цена XAU/USD', color='black', alpha=0.5)
+        plt.plot(df_plot.index, df_plot['Close'], label='Цена XAU/USD', color='black', alpha=0.7)
         plt.axhline(entry, color='blue', linestyle='--', label='Entry')
         plt.axhline(tp, color='green', linestyle='--', label='Take Profit')
         plt.axhline(sl, color='red', linestyle='--', label='Stop Loss')
-        plt.title('XAU/USD с торговыми уровнями')
+        plt.title('XAU/USD | Текущая неделя (15min)')
         plt.legend()
+        plt.grid(True)
         plt.savefig(GRAPH_PATH)
         plt.close()
         logging.info("График успешно создан")
@@ -173,24 +164,56 @@ def generate_graph(current_price, entry, tp, sl):
         logging.error(f"Ошибка создания графика: {str(e)}")
         raise
 
+# === Анализ младшего ТФ для подтверждения сигнала ===
+def check_short_term_confirmation(df_15m, signal):
+    try:
+        df_15m['RSI'] = compute_rsi(df_15m['Close'], window=14)
+        rsi = df_15m['RSI'].iloc[-1]
+        trend = 'up' if df_15m['Close'].iloc[-1] > df_15m['Close'].iloc[-5:].mean() else 'down'
+
+        # Проверка по RSI и тренду
+        if signal == "BUY" and trend == "up" and rsi < 60:
+            return True
+        elif signal == "SELL" and trend == "down" and rsi > 40:
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Ошибка анализа младшего ТФ: {str(e)}")
+        return False
+
 # === Основная логика бота ===
 def main():
     try:
         logging.info("=== НАЧАЛО ВЫПОЛНЕНИЯ MAIN ===")
-        df = fetch_data(TICKER, LOOKBACK_DAYS)
 
-        X, y, full_data = prepare_features(df, TRADE_HORIZON)
+        # Загрузка дневных данных для модели
+        df_daily = fetch_data(TICKER, LOOKBACK_DAYS, interval='1d')
+        X, y, _ = prepare_features(df_daily, TRADE_HORIZON)
         model, accuracy = train_or_load_model(X, y)
 
+        # Получаем последнюю цену из дневных данных
+        daily_price = float(df_daily['Close'].iloc[-1])
+
+        # Прогноз по дневной модели
         last_row = X.iloc[-1].values.reshape(1, -1)
         prediction = model.predict(last_row)[0]
-        current_price = float(df['Close'].iloc[-1])
+        signal_str = "BUY" if prediction == 1 else "SELL"
 
-        signal = "BUY" if prediction == 1 else "SELL"
-        entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal)
+        # Загружаем 15-минутные данные для текущей цены и анализа
+        df_15m = fetch_data(TICKER, 7, interval='15m')
+        current_price = float(df_15m['Close'].iloc[-1])
 
-        asyncio.run(send_telegram_signal(signal, entry, tp, sl, risk, current_price, accuracy))
-        logging.info(f"Сигнал отправлен: {signal}, Entry: {entry}, TP: {tp}, SL: {sl}, Цена: {current_price}")
+        # Проверяем сигнал на младшем ТФ
+        is_confirmed = check_short_term_confirmation(df_15m, signal_str)
+
+        if not is_confirmed:
+            logging.info(f"Сигнал {signal_str} не подтверждён → пропуск")
+            return
+
+        # Если сигнал подтверждён → отправляем его
+        entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal_str)
+        asyncio.run(send_telegram_signal(signal_str, entry, tp, sl, risk, current_price, accuracy))
+        logging.info(f"Сигнал отправлен: {signal_str}, Entry: {entry:.2f}, TP: {tp:.2f}, SL: {sl:.2f}")
 
     except Exception as e:
         logging.error(f"КРИТИЧЕСКАЯ ОШИБКА: {str(e)}", exc_info=True)
@@ -200,18 +223,19 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    main()  # Выполняем основную логику
-    return jsonify({"status": "OK", "message": "Signal sent successfully"})
+    if request.method == 'GET':
+        main()
+    return {"status": "OK", "message": "Signal sent successfully"}
 
 @app.route('/signal')
 def manual_signal():
-    main()  # Ручной запуск через /signal
-    return jsonify({"status": "OK", "message": "Signal manually triggered!"})
+    main()
+    return {"status": "OK", "message": "Signal manually triggered!"}
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     logging.exception("Uncaught exception: %s", str(e))
-    return jsonify(error=str(e)), 500
+    return {"error": str(e)}, 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

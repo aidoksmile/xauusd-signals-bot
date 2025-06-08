@@ -1,5 +1,7 @@
 flask
 yfinance
+keras
+tensorflow
 scikit-learn
 pandas
 numpy

@@ -107,7 +107,7 @@ def train_or_load_model(X_train, y_train):
         logging.info("Модель не найдена. Обучение новой LSTM-модели...")
 
         model = Sequential()
-        model.add(Input(shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(Input(shape=(X_train.shape[1], X_train.shape[2])))
         model.add(LSTM(64, return_sequences=True))
         model.add(Dropout(0.2))
         model.add(LSTM(64, return_sequences=False))
@@ -212,7 +212,7 @@ def walk_forward_training(X, y):
         y_train, y_test = y[train_index], y[test_index]
 
         model = Sequential()
-        model.add(Input(shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(Input(shape=(X_train.shape[1], X_train.shape[2])))
         model.add(LSTM(64, return_sequences=True))
         model.add(Dropout(0.2))
         model.add(LSTM(64, return_sequences=False))

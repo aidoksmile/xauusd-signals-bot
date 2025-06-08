@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score
 from joblib import dump, load
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -24,6 +25,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 
 # === Telegram Bot ===
 import telegram
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters
 
 # === Настройка логирования ===
 logging.basicConfig(
@@ -43,8 +45,8 @@ MODEL_PATH = "xauusd_lstm_model.pkl"
 GRAPH_PATH = "xauusd_signal.png"
 HISTORY_CSV = "trades_history.csv"
 
-CHECK_INTERVAL = 900  # Проверка каждые 15 минут
-MIN_ACCURACY_THRESHOLD = 0.6  # Если точность ниже — переобучаем
+CHECK_INTERVAL = 900  # Каждые 15 минут
+MIN_ACCURACY_THRESHOLD = 0.6  # Если точность ниже — переобучаем модель
 
 # === Функции работы с данными ===
 def fetch_data(ticker, lookback_days, interval='1d'):
@@ -61,11 +63,19 @@ def fetch_data(ticker, lookback_days, interval='1d'):
         logging.error(f"Ошибка загрузки данных: {str(e)}")
         raise
 
+def compute_rsi(series, window=14):
+    delta = series.diff().dropna()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window).mean()
+    avg_loss = loss.rolling(window).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 def prepare_features(data, horizon=3):
     try:
         logging.info("Подготовка признаков для LSTM...")
-        data['Target'] = data['Close'].shift(-horizon).pct_change(horizon) > 0
-        data['Target'] = data['Target'].astype(int)
+        data['Target'] = (data['Close'].shift(-horizon).pct_change(horizon) > 0).astype(int)
         data.dropna(inplace=True)
 
         features = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -95,13 +105,13 @@ def train_or_load_model(X_train, y_train):
         return model
     except FileNotFoundError:
         logging.info("Модель не найдена. Обучение новой LSTM-модели...")
-        model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])),
-            Dropout(0.2),
-            LSTM(64, return_sequences=False),
-            Dropout(0.2),
-            Dense(1, activation='sigmoid')
-        ])
+        model = Sequential()
+        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=False))
+        model.add(Dropout(0.2))
+        model.add(Dense(1, activation='sigmoid'))
+
         model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
         early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
         model.fit(X_train, y_train, epochs=20, batch_size=32, callbacks=[early_stop], verbose=0)
@@ -190,15 +200,6 @@ def check_short_term_confirmation(df_15m, signal):
         logging.error(f"Ошибка анализа младшего ТФ: {str(e)}")
         return False
 
-def compute_rsi(series, window=14):
-    delta = series.diff().dropna()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window).mean()
-    avg_loss = loss.rolling(window).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
 # === Walk-forward обучение ===
 def walk_forward_training(X, y):
     tscv = TimeSeriesSplit(n_splits=5)
@@ -209,20 +210,19 @@ def walk_forward_training(X, y):
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
 
-        model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]),
-            Dropout(0.2),
-            LSTM(64, return_sequences=False),
-            Dropout(0.2),
-            Dense(1, activation='sigmoid')
-        ])
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
+        model = Sequential()
+        model.add(LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=False))
+        model.add(Dropout(0.2))
+        model.add(Dense(1, activation='sigmoid'))
 
+        model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
         early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
         model.fit(X_train, y_train, epochs=20, batch_size=32, callbacks=[early_stop], verbose=0)
 
         pred = model.predict(X_test, verbose=0)
-        accuracy = accuracy_score(y_test, (pred > 0.5))
+        accuracy = accuracy_score(y_test, (pred > 0.5).flatten())
         if accuracy > best_accuracy:
             best_accuracy = accuracy
             best_model = model
@@ -237,7 +237,7 @@ def run_backtest(model, df, X):
         pred = model.predict(X, verbose=0)
         df = df.iloc[60:].copy()
         df['Signal'] = (pred > 0.5).flatten().astype(int)
-        df['Signal'] = df['Signal'].map({True: 1, False: -1})
+        df['Signal'] = df['Signal'].map({1: 1, 0: -1})
 
         df['Return'] = df['Close'].pct_change(TRADE_HORIZON).shift(-TRADE_HORIZON)
         df['Strategy_Return'] = df['Signal'].shift(1) * df['Return']
@@ -250,6 +250,7 @@ def run_backtest(model, df, X):
         plt.plot(buy_and_hold, label='Buy & Hold')
         plt.title('Backtesting стратегии')
         plt.legend()
+        plt.grid(True)
         plt.savefig("backtest.png")
         plt.close()
 
@@ -298,14 +299,11 @@ def main():
         df_daily = fetch_data(TICKER, LOOKBACK_DAYS, interval='1d')
         X, y, full_data = prepare_features(df_daily, TRADE_HORIZON)
 
-        # Walk-forward обучение
         model, accuracy = walk_forward_training(X, y)
 
-        # Получаем текущую цену из 15-минутных данных
         df_15m = fetch_data(TICKER, 7, interval='15m')
         current_price = float(df_15m['Close'].iloc[-1])
 
-        # Прогноз
         prediction = model.predict(X[-1:], verbose=0)[0][0] > 0.5
         signal_str = "BUY" if prediction else "SELL"
 
@@ -314,11 +312,8 @@ def main():
             logging.info(f"Сигнал {signal_str} не подтверждён → пропуск")
             return
 
-        # Уровни и отправка
         entry, tp, sl, risk = calculate_entry_tp_sl(current_price, signal_str)
         asyncio.run(send_telegram_signal(signal_str, entry, tp, sl, risk, current_price))
-
-        # Запись в историю
         backtest_results = run_backtest(model, full_data, X)
         log_trade(signal_str, entry, tp, sl, current_price, accuracy, backtest_results)
 
@@ -327,14 +322,12 @@ def main():
 
 # === Команды Telegram-бота ===
 def run_telegram_bot():
-    from telegram.ext import Updater
-
     async def handle_start(update, context):
         await update.message.reply_text("🤖 Бот активен. Используйте:\n/signal - получить прогноз\n/history - история сделок\n/graph - график торговли\n/accuracy - точность модели")
 
     async def handle_signal(update, context):
         df_daily = fetch_data(TICKER, LOOKBACK_DAYS, interval='1d')
-        X, _, _ = prepare_features(df_daily, TRADE_HORIZON)
+        X, y, _ = prepare_features(df_daily, TRADE_HORIZON)
         model = load(MODEL_PATH)
         prediction = model.predict(X[-1:], verbose=0)[0][0] > 0.5
         signal_str = "BUY" if prediction else "SELL"
@@ -343,26 +336,28 @@ def run_telegram_bot():
     async def handle_history(update, context):
         if os.path.exists(HISTORY_CSV):
             history_df = pd.read_csv(HISTORY_CSV)
-            await update.message.reply_text("📜 История сделок:")
+            await update.message.reply_text("📜 Последние 10 сделок:")
             for _, row in history_df.tail(10).iterrows():
-                await update.message.reply_text(f"{row['Date']} | {row['Signal']} | TP: {row['TP']:.2f} | SL: {row['SL']:.2f}")
+                await update.message.reply_text(
+                    f"{row['Date']} | {row['Signal']} | "
+                    f"TP: {row['TP']:.2f} | SL: {row['SL']:.2f}"
+                )
         else:
             await update.message.reply_text("❌ История сделок пуста")
 
     async def handle_graph(update, context):
-        df_daily = fetch_data(TICKER, LOOKBACK_DAYS, interval='1d')
-        X, y, full_data = prepare_features(df_daily, TRADE_HORIZON)
-        model = load(MODEL_PATH)
-        run_backtest(model, full_data, X)
-        with open("backtest.png", 'rb') as photo:
-            await update.message.reply_photo(photo, caption="📈 Equity Curve")
+        if os.path.exists("backtest.png"):
+            with open("backtest.png", 'rb') as photo:
+                await update.message.reply_photo(photo, caption="📈 Equity Curve")
+        else:
+            await update.message.reply_text("❌ График ещё не доступен")
 
     async def handle_accuracy(update, context):
         model = load(MODEL_PATH)
         df_daily = fetch_data(TICKER, LOOKBACK_DAYS, interval='1d')
         X, y, _ = prepare_features(df_daily, TRADE_HORIZON)
         pred = model.predict(X, verbose=0)
-        acc = accuracy_score(y, (pred > 0.5))
+        acc = accuracy_score(y, (pred > 0.5).flatten())
         await update.message.reply_text(f"📊 Точность модели: *{acc * 100:.2f}%*", parse_mode="Markdown")
 
     async def handle_unknown(update, context):
@@ -375,8 +370,10 @@ def run_telegram_bot():
         application.add_handler(telegram.ext.CommandHandler("history", handle_history))
         application.add_handler(telegram.ext.CommandHandler("graph", handle_graph))
         application.add_handler(telegram.ext.CommandHandler("accuracy", handle_accuracy))
-        application.add_handler(telegram.ext.MessageHandler(telegram.ext.filters.TEXT, handle_unknown))
+        application.add_handler(telegram.ext.MessageHandler(filters.TEXT, handle_unknown))
         await application.run_polling()
+
+    asyncio.run(telegram_bot())
 
 # === Flask App ===
 app = Flask(__name__)
@@ -398,13 +395,22 @@ def handle_exception(e):
     return {"error": str(e)}, 500
 
 # === Цикл проверки ===
-if __name__ == "__main__":
-    from threading import Thread
-    from flask import Flask
+def run_continuously():
+    while True:
+        try:
+            main()
+        except Exception as e:
+            logging.error(f"Ошибка в основном цикле: {str(e)}")
+        time.sleep(CHECK_INTERVAL)
 
-    # Запуск Telegram-бота
-    tele_thread = Thread(target=lambda: asyncio.run(telegram_bot()), daemon=True)
+if __name__ == "__main__":
+    # Запуск Telegram-бота в отдельном потоке
+    tele_thread = Thread(target=run_telegram_bot, daemon=True)
     tele_thread.start()
 
-    # Запуск веб-сервиса
+    # Запуск основного цикла проверки
+    checker_thread = Thread(target=run_continuously, daemon=True)
+    checker_thread.start()
+
+    # Запуск Flask-сервиса
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

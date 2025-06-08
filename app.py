@@ -75,7 +75,7 @@ def compute_rsi(series, window=14):
 def prepare_features(data, horizon=3):
     try:
         logging.info("Подготовка признаков для LSTM...")
-        data['Target'] = (data['Close'].shift(-horizon).pct_change(horizon) > 0).astype(int)
+        data['Target'] = (data['Close'].shift(-horizon).pct_change(horizon, fill_method=None) > 0).astype(int)
         data.dropna(inplace=True)
 
         features = ['Open', 'High', 'Low', 'Close', 'Volume']

@@ -174,8 +174,11 @@ def generate_graph(current_price, entry, tp, sl):
 def check_short_term_confirmation(df_15m, signal):
     try:
         df_15m['RSI'] = compute_rsi(df_15m['Close'], window=14)
-        rsi = df_15m['RSI'].iloc[-1]
-        trend = 'up' if df_15m['Close'].iloc[-1] > df_15m['Close'].iloc[-5:].mean() else 'down'
+        latest_price = float(df_15m['Close'].iloc[-1])
+        avg_price = float(df_15m['Close'].iloc[-5:].mean())
+        rsi = float(df_15m['RSI'].iloc[-1])
+
+        trend = 'up' if latest_price > avg_price else 'down'
 
         if signal == "BUY" and trend == "up" and rsi < 60:
             return True
